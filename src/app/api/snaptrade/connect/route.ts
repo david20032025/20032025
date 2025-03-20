@@ -1,14 +1,16 @@
 import { NextResponse } from "next/server";
-import { createSnapTradeUserLink } from "@/utils/snaptrade";
 import { createClient } from "@/supabase/server";
+import { deleteSnapTradeConnection } from "@/utils/snaptrade";
 
 // Set cache control headers to prevent caching
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-export async function POST(request: Request) {
+export async function DELETE(request: Request) {
   try {
-    const { userId, brokerId, redirectUri } = await request.json();
+    const url = new URL(request.url);
+    const userId = url.searchParams.get("userId");
+    const connectionId = url.searchParams.get("connectionId");
 
     if (!userId) {
       return NextResponse.json(
@@ -17,9 +19,9 @@ export async function POST(request: Request) {
       );
     }
 
-    if (!redirectUri) {
+    if (!connectionId) {
       return NextResponse.json(
-        { error: "Redirect URI is required" },
+        { error: "Connection ID is required" },
         { status: 400 },
       );
     }
@@ -31,7 +33,15 @@ export async function POST(request: Request) {
       error: userError,
     } = await supabase.auth.getUser();
 
-    if (userError || !user) {
+    if (userError) {
+      console.error("Error getting user:", userError);
+      return NextResponse.json(
+        { error: `Auth error: ${userError.message}` },
+        { status: 401 },
+      );
+    }
+
+    if (!user) {
       return NextResponse.json(
         { error: "User not authenticated" },
         { status: 401 },
@@ -42,38 +52,30 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "User ID mismatch" }, { status: 403 });
     }
 
-    // Generate connection portal URL
-    const redirectURL = await createSnapTradeUserLink(
-      userId,
-      redirectUri,
-      brokerId,
-    );
+    // Delete the connection from SnapTrade
+    await deleteSnapTradeConnection(userId, connectionId);
 
-    return NextResponse.json(
-      { redirectUri: redirectURL },
-      {
-        headers: {
-          "Cache-Control": "no-store, max-age=0, must-revalidate",
-          Pragma: "no-cache",
-          Expires: "0",
-        },
-      },
-    );
+    // Delete the connection from the database
+    const { error: deleteError } = await supabase
+      .from("broker_connections")
+      .delete()
+      .eq("user_id", userId)
+      .eq("connection_id", connectionId);
+
+    if (deleteError) {
+      console.error("Error deleting connection from database:", deleteError);
+      return NextResponse.json(
+        { error: `Database error: ${deleteError.message}` },
+        { status: 500 },
+      );
+    }
+
+    return NextResponse.json({ success: true });
   } catch (error) {
-    console.error("Error creating SnapTrade connection:", error);
+    console.error("Error deleting SnapTrade connection:", error);
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error";
 
-    return NextResponse.json(
-      { error: errorMessage },
-      {
-        status: 500,
-        headers: {
-          "Cache-Control": "no-store, max-age=0, must-revalidate",
-          Pragma: "no-cache",
-          Expires: "0",
-        },
-      },
-    );
+    return NextResponse.json({ error: errorMessage }, { status: 500 });
   }
 }

@@ -1,7 +1,4 @@
-/**
- * Functions for interacting with the SnapTrade API
- */
-import { snaptrade } from "./snaptrade-sdk";
+import { snaptrade, SUPPORTED_BROKERS } from "./snaptrade-sdk";
 import { createClient } from "@/supabase/client";
 
 /**
@@ -125,38 +122,29 @@ export async function registerSnapTradeUser(userId: string) {
 
         // If we don't have a user secret, try a different approach
         if (!userSecret) {
-          console.log(
-            "No user secret found in error response, trying to login directly",
+          console.warn(
+            "User secret not found in response, attempting to retrieve user details",
           );
-
-          try {
-            // Try to get user details first instead of direct login
-            const userResponse = await snaptrade.authentication.getUserDetails({
-              userId: userId,
-            });
-
-            if (userResponse.data?.userSecret) {
-              // Update the database with the retrieved user secret
-              await supabase
-                .from("broker_connections")
-                .update({
-                  api_secret_encrypted: userResponse.data.userSecret,
-                  broker_data: {
-                    registered_at: new Date().toISOString(),
-                    snap_trade_user_id: userId,
-                  },
-                })
-                .eq("user_id", userId)
-                .eq("broker_id", "snaptrade");
-
-              return { userId, userSecret: userResponse.data.userSecret };
-            }
-          } catch (loginError) {
-            console.log(`Error getting user details: ${loginError}`);
-          }
 
           // If direct login fails, try delete and recreate
           try {
+            // Try to get user details first before deleting
+            const userDetailsResponse =
+              await snaptrade.authentication.listSnapTradeUsers({
+                userId: userId,
+              });
+
+            if (
+              userDetailsResponse.data &&
+              userDetailsResponse.data.length > 0
+            ) {
+              const userDetails = userDetailsResponse.data[0];
+              if (userDetails.userSecret) {
+                return { userId, userSecret: userDetails.userSecret };
+              }
+            }
+
+            // If we still don't have the user secret, delete and recreate
             console.log("Attempting to delete and recreate user");
             // Try to delete the existing user
             await snaptrade.authentication.deleteSnapTradeUser({
@@ -285,6 +273,90 @@ export async function getUserSecret(userId: string) {
 }
 
 /**
+ * Delete a SnapTrade connection
+ * @param userId The user ID
+ * @param authorizationId The connection ID to delete
+ */
+export async function deleteSnapTradeConnection(
+  userId: string,
+  authorizationId: string,
+) {
+  if (!snaptrade) {
+    throw new Error("SnapTrade SDK not initialized");
+  }
+
+  try {
+    // Get the user secret from the database
+    const userSecret = await getUserSecret(userId);
+
+    // Get all accounts for the user to find the one with matching connection ID
+    const accountsResponse =
+      await snaptrade.accountInformation.listUserAccounts({
+        userId: userId,
+        userSecret: userSecret,
+      });
+
+    if (!accountsResponse.data) {
+      throw new Error("Failed to fetch accounts");
+    }
+
+    // Find the account with the matching connection ID
+    const account = accountsResponse.data.find(
+      (acc) => acc.brokerage?.authorizationId === authorizationId,
+    );
+
+    if (!account) {
+      console.warn(`No account found with connection ID ${authorizationId}`);
+      // If we can't find the account, we'll just return success and let the database deletion proceed
+      return true;
+    }
+
+    // Instead of using removeBrokerageAuthorization, we'll use the account deletion endpoint
+    await snaptrade.accountInformation.deleteUserAccount({
+      userId: userId,
+      userSecret: userSecret,
+      accountId: account.id,
+    });
+
+    // Update the broker connection in the database to mark it as inactive
+    const supabase = createClient();
+
+    // First get the existing broker_data to preserve any fields
+    const { data: existingData } = await supabase
+      .from("broker_connections")
+      .select("broker_data")
+      .eq("user_id", userId)
+      .eq("broker_id", "snaptrade")
+      .maybeSingle();
+
+    const existingBrokerData = existingData?.broker_data || {};
+
+    const { error: dbError } = await supabase
+      .from("broker_connections")
+      .update({
+        is_active: false,
+        broker_data: {
+          ...existingBrokerData,
+          disconnected_at: new Date().toISOString(),
+          authorization_id: authorizationId,
+        },
+      })
+      .eq("user_id", userId)
+      .eq("broker_id", "snaptrade");
+
+    if (dbError) {
+      console.error("Error updating broker connection in database:", dbError);
+      throw new Error(`Database error: ${dbError.message}`);
+    }
+
+    return true;
+  } catch (error) {
+    console.error("Error deleting SnapTrade connection:", error);
+    throw error;
+  }
+}
+
+/**
  * Generate a connection portal URL for a SnapTrade user
  * @param userId The user ID to generate the URL for
  * @param redirectUri The URI to redirect to after connection
@@ -305,15 +377,57 @@ export async function createSnapTradeUserLink(
       // Get the user secret from the database
       const userSecret = await getUserSecret(userId);
 
+      // Map broker ID to the correct format if needed
+      let snapTradeBrokerId = brokerId;
+
+      // Validate broker ID if provided
+      if (brokerId && brokerId.trim() !== "") {
+        // Convert to uppercase for comparison
+        const upperBrokerId = brokerId.toUpperCase();
+
+        // Handle Interactive Brokers special case
+        if (
+          upperBrokerId === "INTERACTIVE_BROKERS" ||
+          upperBrokerId === "IBKR"
+        ) {
+          // Skip broker ID for Interactive Brokers completely
+          snapTradeBrokerId = null;
+          console.log(
+            "Interactive Brokers detected, skipping broker ID parameter",
+          );
+        } else {
+          snapTradeBrokerId = upperBrokerId;
+          console.log(
+            `Using broker ID: ${snapTradeBrokerId} for SnapTrade connection`,
+          );
+
+          // Check if the broker ID is in the supported list
+          if (!SUPPORTED_BROKERS.includes(snapTradeBrokerId)) {
+            console.warn(
+              `Broker ID ${snapTradeBrokerId} may not be supported by SnapTrade`,
+            );
+          }
+        }
+      }
+
       // Generate connection portal URL
       const response = await snaptrade.authentication.loginSnapTradeUser({
         userId: userId,
         userSecret: userSecret,
-        broker: brokerId || undefined,
+        // Only include broker if it's a valid string and not empty
+        // Completely omit the broker parameter for Interactive Brokers or if no broker specified
+        ...(snapTradeBrokerId &&
+        snapTradeBrokerId.trim() !== "" &&
+        snapTradeBrokerId !== "IBKR" &&
+        snapTradeBrokerId !== "INTERACTIVE_BROKERS"
+          ? { broker: snapTradeBrokerId }
+          : {}),
         immediateRedirect: false, // Changed to false to better handle errors
-        customRedirect: redirectUri,
+        customRedirect: redirectUri, // This will be the callback URL that handles the redirect to assets page
         connectionPortalVersion: "v4",
       });
+
+      console.log(`Generated redirect URI: ${response.data?.redirectURI}`);
 
       if (!response.data || !response.data.redirectURI) {
         throw new Error("Failed to generate connection portal URL");
@@ -326,7 +440,7 @@ export async function createSnapTradeUserLink(
         .update({
           broker_data: {
             connection_started: new Date().toISOString(),
-            broker_id: brokerId || "any",
+            broker_id: snapTradeBrokerId || "any",
           },
         })
         .eq("user_id", userId)
@@ -458,97 +572,25 @@ export async function fetchSnapTradeHoldings(
 
     let holdings = [];
 
-    if (accountId) {
-      // Get positions for a specific account
-      const positionsResponse =
-        await snaptrade.accountInformation.getUserAccountPositions({
-          userId: userId,
-          userSecret: userSecret,
-          accountId: accountId,
-        });
-
-      if (!positionsResponse.data) {
-        throw new Error("Failed to fetch positions");
-      }
-
-      // Get account details
-      const accountsResponse =
-        await snaptrade.accountInformation.listUserAccounts({
-          userId: userId,
-          userSecret: userSecret,
-        });
-
-      const account = accountsResponse.data?.find(
-        (acc) => acc.id === accountId,
-      );
-
-      // Process positions
-      holdings = positionsResponse.data.map((position) => {
-        const quantity = parseFloat(position.quantity || "0");
-        const price = parseFloat(position.price || "0");
-        const bookValue = parseFloat(position.bookValue || "0");
-        const totalValue = quantity * price;
-
-        return {
-          symbol: position.symbol.symbol || position.symbol,
-          name:
-            position.symbol.description ||
-            position.symbol.symbol ||
-            position.symbol,
-          quantity: quantity,
-          pricePerShare: price,
-          totalValue: totalValue,
-          gainLoss: totalValue - bookValue,
-          purchasePrice: bookValue / quantity,
-          accountId: accountId,
-          accountName: account?.name || "Investment Account",
-          brokerName: account?.brokerage?.name || "SnapTrade",
-          currency: position.currency || "USD",
-        };
+    // Get all accounts for the user
+    const accountsResponse =
+      await snaptrade.accountInformation.listUserAccounts({
+        userId: userId,
+        userSecret: userSecret,
       });
 
-      // Get balances for the account
-      const balancesResponse =
-        await snaptrade.accountInformation.getUserAccountBalance({
-          userId: userId,
-          userSecret: userSecret,
-          accountId: accountId,
-        });
+    if (!accountsResponse.data) {
+      throw new Error("Failed to fetch accounts");
+    }
 
-      // Add cash balances
-      if (balancesResponse.data) {
-        for (const balance of balancesResponse.data) {
-          if (balance.cash && parseFloat(balance.amount) > 0) {
-            holdings.push({
-              symbol: "CASH",
-              name: `Cash (${balance.currency})`,
-              quantity: 1,
-              pricePerShare: parseFloat(balance.amount),
-              totalValue: parseFloat(balance.amount),
-              gainLoss: 0,
-              purchasePrice: parseFloat(balance.amount),
-              accountId: accountId,
-              accountName: account?.name || "Investment Account",
-              brokerName: account?.brokerage?.name || "SnapTrade",
-              currency: balance.currency || "USD",
-            });
-          }
-        }
-      }
-    } else {
-      // Get all accounts for the user
-      const accountsResponse =
-        await snaptrade.accountInformation.listUserAccounts({
-          userId: userId,
-          userSecret: userSecret,
-        });
+    // Filter accounts if accountId is provided
+    const accountsToProcess = accountId
+      ? accountsResponse.data.filter((acc) => acc.id === accountId)
+      : accountsResponse.data;
 
-      if (!accountsResponse.data) {
-        throw new Error("Failed to fetch accounts");
-      }
-
-      // For each account, get the positions and balances
-      for (const account of accountsResponse.data) {
+    // For each account, try to get the positions and balances
+    for (const account of accountsToProcess) {
+      try {
         // Get positions for the account
         const positionsResponse =
           await snaptrade.accountInformation.getUserAccountPositions({
@@ -587,40 +629,96 @@ export async function fetchSnapTradeHoldings(
         }
 
         // Get balances for the account
-        const balancesResponse =
-          await snaptrade.accountInformation.getUserAccountBalance({
-            userId: userId,
-            userSecret: userSecret,
-            accountId: account.id,
-          });
+        try {
+          const balancesResponse =
+            await snaptrade.accountInformation.getUserAccountBalance({
+              userId: userId,
+              userSecret: userSecret,
+              accountId: account.id,
+            });
 
-        // Add cash balances
-        if (balancesResponse.data) {
-          for (const balance of balancesResponse.data) {
-            if (balance.cash && parseFloat(balance.amount) > 0) {
-              holdings.push({
-                symbol: "CASH",
-                name: `Cash (${balance.currency})`,
-                quantity: 1,
-                pricePerShare: parseFloat(balance.amount),
-                totalValue: parseFloat(balance.amount),
-                gainLoss: 0,
-                purchasePrice: parseFloat(balance.amount),
-                accountId: account.id,
-                accountName: account.name || "Investment Account",
-                brokerName: account.brokerage?.name || "SnapTrade",
-                currency: balance.currency || "USD",
-              });
+          // Add cash balances
+          if (balancesResponse.data) {
+            for (const balance of balancesResponse.data) {
+              if (balance.cash && parseFloat(balance.amount) > 0) {
+                holdings.push({
+                  symbol: "CASH",
+                  name: `Cash (${balance.currency})`,
+                  quantity: 1,
+                  pricePerShare: parseFloat(balance.amount),
+                  totalValue: parseFloat(balance.amount),
+                  gainLoss: 0,
+                  purchasePrice: parseFloat(balance.amount),
+                  accountId: account.id,
+                  accountName: account.name || "Investment Account",
+                  brokerName: account.brokerage?.name || "SnapTrade",
+                  currency: balance.currency || "USD",
+                });
+              }
             }
           }
+        } catch (balanceError) {
+          console.warn(
+            `Error fetching balances for account ${account.id}:`,
+            balanceError,
+          );
+          // Continue with next account even if balance fetch fails
         }
+      } catch (positionError) {
+        // Check if this is a "Too Early" error (425)
+        const errorStatus =
+          positionError.status || positionError.responseBody?.status_code || 0;
+        if (errorStatus === 425 || positionError.message?.includes("425")) {
+          console.warn(
+            `Account ${account.id} sync not yet completed. Adding placeholder data.`,
+          );
+
+          // Add a placeholder entry for this account
+          holdings.push({
+            symbol: "PENDING",
+            name: `${account.name || "Account"} (Syncing...)`,
+            quantity: 0,
+            pricePerShare: 0,
+            totalValue: 0,
+            gainLoss: 0,
+            purchasePrice: 0,
+            accountId: account.id,
+            accountName: account.name || "Investment Account",
+            brokerName: account.brokerage?.name || "SnapTrade",
+            currency: "USD",
+            isPending: true,
+          });
+        } else {
+          console.error(
+            `Error fetching positions for account ${account.id}:`,
+            positionError,
+          );
+        }
+        // Continue with next account even if position fetch fails
       }
     }
 
     return holdings;
   } catch (error) {
     console.error("Error fetching SnapTrade holdings:", error);
-    throw error;
+    // Return empty array with error indicator instead of throwing to prevent cascading errors
+    return [
+      {
+        symbol: "ERROR",
+        name: "Error fetching holdings",
+        quantity: 0,
+        pricePerShare: 0,
+        totalValue: 0,
+        gainLoss: 0,
+        purchasePrice: 0,
+        accountId: "error",
+        accountName: "Error",
+        brokerName: "SnapTrade",
+        currency: "USD",
+        isError: true,
+        errorMessage: error instanceof Error ? error.message : "Unknown error",
+      },
+    ];
   }
 }
 
@@ -670,6 +768,34 @@ export async function handleSnapTradeCallback(
       })
       .eq("user_id", userId)
       .eq("broker_id", "snaptrade");
+
+    // Refresh brokerage authorization to ensure we have the latest data
+    if (authorizationId) {
+      try {
+        console.log(
+          `Refreshing brokerage authorization for ID: ${authorizationId}`,
+        );
+        const refreshResponse =
+          await snaptrade.connections.refreshBrokerageAuthorization({
+            authorizationId: authorizationId,
+            userId: userId,
+            userSecret: userSecret,
+          });
+        console.log(
+          "Successfully refreshed brokerage authorization",
+          refreshResponse.data,
+        );
+
+        // Add a small delay to allow data to propagate
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      } catch (refreshError) {
+        console.error(
+          "Error refreshing brokerage authorization:",
+          refreshError,
+        );
+        // Continue with the process even if refresh fails
+      }
+    }
 
     // Get all accounts for the user
     const accountsResponse =
@@ -765,24 +891,37 @@ export async function handleSnapTradeCallback(
       if (balancesResponse.data) {
         // Process cash balances
         for (const balance of balancesResponse.data) {
-          if (balance.cash && parseFloat(balance.amount) > 0) {
+          // Special handling for Interactive Brokers cash balances
+          // Check if it's cash or if the amount is positive
+          const isCash = balance.cash || balance.type === "CASH";
+          const amount = parseFloat(balance.amount || "0");
+          const brokerName = account.brokerage?.name || "";
+
+          if (
+            (isCash && amount > 0) ||
+            (brokerName.toUpperCase().includes("INTERACTIVE") && amount > 0)
+          ) {
+            console.log(
+              `Processing cash balance: ${amount} ${balance.currency}`,
+            );
+
             // Insert the cash as an asset
             const { error: insertError } = await supabase
               .from("assets")
               .insert({
                 name: `Cash (${balance.currency})`,
-                value: parseFloat(balance.amount),
+                value: amount,
                 description: `Cash balance in ${account.name}`,
                 location: account.name || "SnapTrade",
                 acquisition_date: new Date().toISOString(),
-                acquisition_value: parseFloat(balance.amount),
+                acquisition_value: amount,
                 category_id: categoryData.id,
                 is_liability: false,
                 user_id: userId,
                 metadata: {
                   symbol: "CASH",
-                  price_per_share: parseFloat(balance.amount),
-                  purchase_price: parseFloat(balance.amount),
+                  price_per_share: amount,
+                  purchase_price: amount,
                   quantity: 1,
                   currency: balance.currency || "USD",
                   asset_type: "cash",
@@ -790,6 +929,7 @@ export async function handleSnapTradeCallback(
                   account_id: account.id,
                   account_name: account.name || "Investment Account",
                   broker_name: account.brokerage?.name || "SnapTrade",
+                  balance_type: balance.type || "CASH",
                 },
               });
 

@@ -31,6 +31,7 @@ import BrokerSelection from "./broker-selection";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import AddAssetForm from "./add-asset-form";
 import AddMetalForm from "./add-metal-form";
+import AddCashForm from "./add-cash-form";
 import CarSearch from "./car-search";
 import { createClient } from "../../../supabase/client";
 import HandleSnapTradeConnection from "./handle-snaptrade-connection";
@@ -44,6 +45,7 @@ export default function AddAssetButton() {
   const [selectedAssetType, setSelectedAssetType] = useState("");
   const [isLinking, setIsLinking] = useState(false);
   const [userId, setUserId] = useState("");
+  const [showCashForm, setShowCashForm] = useState(false);
 
   const handleClose = () => {
     setOpen(false);
@@ -56,6 +58,7 @@ export default function AddAssetButton() {
     setShowCarSearch(false);
     setShowSnapTradeBrokerSelection(false);
     setShowHandleConnection(false);
+    setShowCashForm(false);
     setIsLinking(false);
   };
 
@@ -76,6 +79,10 @@ export default function AddAssetButton() {
       setShowStocksOptions(false);
       setShowAssetTypes(false);
       setShowCarSearch(true);
+    } else if (type === "cash") {
+      setShowStocksOptions(false);
+      setShowAssetTypes(false);
+      setShowCashForm(true);
     } else {
       setShowStocksOptions(false);
       setShowAssetTypes(false);
@@ -84,9 +91,6 @@ export default function AddAssetButton() {
       switch (type) {
         case "homes":
           setActiveTab("real-estate");
-          break;
-        case "cash":
-          setActiveTab("cash");
           break;
         case "domains":
         case "manually":
@@ -439,23 +443,21 @@ export default function AddAssetButton() {
         )}
 
         {showSnapTradeBrokerSelection && (
-          <>
-            <BrokerSelection
-              onBack={() => {
-                setShowSnapTradeBrokerSelection(false);
-                setShowStocksOptions(true);
-              }}
-              onSelect={(brokerId) => {
-                setShowSnapTradeBrokerSelection(false);
-                setIsLinking(true);
+          <BrokerSelection
+            onBack={() => {
+              setShowSnapTradeBrokerSelection(false);
+              setShowStocksOptions(true);
+            }}
+            onSelect={(brokerId) => {
+              setShowSnapTradeBrokerSelection(false);
+              setIsLinking(true);
 
-                // Show the connection component
-                setShowSnapTradeBrokerSelection(false);
-                setShowHandleConnection(true);
-                setSelectedBrokerId(brokerId);
-              }}
-            />
-          </>
+              // Show the connection component
+              setShowSnapTradeBrokerSelection(false);
+              setShowHandleConnection(true);
+              setSelectedBrokerId(brokerId);
+            }}
+          />
         )}
 
         {showHandleConnection && (
@@ -530,6 +532,35 @@ export default function AddAssetButton() {
           </>
         )}
 
+        {showCashForm && (
+          <>
+            <DialogHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <DialogTitle>Add Cash</DialogTitle>
+                  <DialogDescription>
+                    Add cash or bank deposits to your portfolio
+                  </DialogDescription>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setShowCashForm(false);
+                    setShowAssetTypes(true);
+                  }}
+                >
+                  Back to Types
+                </Button>
+              </div>
+            </DialogHeader>
+
+            <div className="mt-4">
+              <AddCashForm onSuccess={handleClose} />
+            </div>
+          </>
+        )}
+
         {showCarSearch && (
           <>
             <DialogHeader>
@@ -558,86 +589,6 @@ export default function AddAssetButton() {
             </div>
           </>
         )}
-
-        {!showAssetTypes &&
-          !showStocksOptions &&
-          !showStockSearch &&
-          !showCryptoSearch &&
-          !showBrokerSelection &&
-          !showMetalsForm &&
-          !showCarSearch &&
-          !showHandleConnection && (
-            <>
-              <DialogHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <DialogTitle>
-                      Add New{" "}
-                      {selectedAssetType.charAt(0).toUpperCase() +
-                        selectedAssetType.slice(1)}
-                    </DialogTitle>
-                    <DialogDescription>
-                      Add details about your asset to track it in your
-                      portfolio.
-                    </DialogDescription>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      if (selectedAssetType === "stocks") {
-                        setShowStocksOptions(true);
-                      } else {
-                        setShowAssetTypes(true);
-                      }
-                    }}
-                  >
-                    Back
-                  </Button>
-                </div>
-              </DialogHeader>
-
-              <Tabs
-                defaultValue="cash"
-                value={activeTab}
-                onValueChange={setActiveTab}
-                className="mt-4"
-              >
-                <TabsContent value="cash">
-                  <AddAssetForm category="cash" onSuccess={handleClose} />
-                </TabsContent>
-
-                <TabsContent value="investments">
-                  <AddAssetForm
-                    category="investments"
-                    onSuccess={handleClose}
-                  />
-                </TabsContent>
-
-                <TabsContent value="real-estate">
-                  <AddAssetForm
-                    category="real-estate"
-                    onSuccess={handleClose}
-                  />
-                </TabsContent>
-
-                <TabsContent value="cryptocurrency">
-                  <AddAssetForm
-                    category="cryptocurrency"
-                    onSuccess={handleClose}
-                  />
-                </TabsContent>
-
-                <TabsContent value="debt">
-                  <AddAssetForm
-                    category="debt"
-                    onSuccess={handleClose}
-                    isLiability={true}
-                  />
-                </TabsContent>
-              </Tabs>
-            </>
-          )}
       </DialogContent>
     </Dialog>
   );

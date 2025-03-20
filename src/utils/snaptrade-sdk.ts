@@ -20,4 +20,36 @@ if (typeof window === "undefined") {
   }
 }
 
+// List of officially supported SnapTrade brokers
+// Note: Only include brokers that are confirmed to work with the SnapTrade API
+export const SUPPORTED_BROKERS = [
+  "ALPACA",
+  "FIDELITY",
+  "QUESTRADE",
+  "ROBINHOOD",
+  "TRADIER",
+  "TRADING_212",
+  "TRADESTATION",
+  "VANGUARD",
+];
+
+// Mapping from display IDs to SnapTrade broker IDs
+export const BROKER_ID_MAPPING: Record<string, string> = {
+  alpaca: "ALPACA",
+  fidelity: "FIDELITY",
+  ibkr: "IBKR", // Interactive Brokers mapping
+  interactive_brokers: "IBKR", // Alternative mapping
+  questrade: "QUESTRADE",
+  robinhood: "ROBINHOOD",
+  tradier: "TRADIER",
+  trading212: "TRADING_212",
+  tradestation: "TRADESTATION",
+  vanguard: "VANGUARD",
+};
+
+// Mapping for common broker ID variations to standardized SnapTrade broker IDs
+export const BROKER_ID_STANDARDIZATION: Record<string, string> = {
+  INTERACTIVE_BROKERS: "IBKR",
+};
+
 export { snaptrade };

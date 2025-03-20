@@ -15,27 +15,26 @@ export const createClient = async () => {
 
   return createServerClient(supabaseUrl, supabaseKey, {
     cookies: {
-      getAll() {
+      get(name) {
         try {
-          return cookieStore.getAll().map(({ name, value }) => ({
-            name,
-            value,
-          }));
+          return cookieStore.get(name)?.value;
         } catch (error) {
-          // If cookies() is called in an environment where it's not allowed
-          console.error("Error accessing cookies:", error);
-          return [];
+          console.error(`Error getting cookie ${name}:`, error);
+          return undefined;
         }
       },
-      setAll(cookiesToSet) {
+      set(name, value, options) {
         try {
-          cookiesToSet.forEach(({ name, value, options }) => {
-            // Use the correct format for setting cookies in Next.js App Router
-            cookieStore.set({ name, value, ...options });
-          });
+          cookieStore.set({ name, value, ...options });
         } catch (error) {
-          // If cookies() is called in an environment where it's not allowed
-          console.error("Error setting cookies:", error);
+          console.error(`Error setting cookie ${name}:`, error);
+        }
+      },
+      remove(name, options) {
+        try {
+          cookieStore.set({ name, value: "", ...options, maxAge: 0 });
+        } catch (error) {
+          console.error(`Error removing cookie ${name}:`, error);
         }
       },
     },

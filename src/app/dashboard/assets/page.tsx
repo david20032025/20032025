@@ -8,6 +8,22 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { CheckCircle2, AlertCircle, Trash2 } from "lucide-react";
 import { revalidatePath } from "next/cache";
+import SyncAssetsButton from "@/components/dashboard/sync-assets-button";
+import SyncSnapTradeAssets from "@/components/dashboard/sync-snaptrade-assets";
+import dynamic from "next/dynamic";
+
+// Dynamically import client components with no SSR
+const BrokerAccountsList = dynamic(
+  () => import("@/components/dashboard/broker-accounts-list"),
+  { ssr: false },
+);
+const BrokerHoldingsList = dynamic(
+  () => import("@/components/dashboard/broker-holdings-list"),
+  { ssr: false },
+);
+
+export const dynamicParams = "force-dynamic";
+export const revalidate = 0;
 
 async function deleteAsset(formData: FormData) {
   "use server";
@@ -34,7 +50,12 @@ async function deleteAsset(formData: FormData) {
 export default async function AssetsPage({
   searchParams,
 }: {
-  searchParams: { success?: string; error?: string };
+  searchParams: {
+    success?: string;
+    error?: string;
+    broker?: string;
+    message?: string;
+  };
 }) {
   const supabase = await createClient();
 
@@ -54,6 +75,8 @@ export default async function AssetsPage({
 
   const showSuccessAlert = searchParams.success === "true";
   const showErrorAlert = searchParams.error === "true";
+  const broker = searchParams.broker || "";
+  const errorMessage = searchParams.message || "";
 
   return (
     <SubscriptionCheck>
@@ -62,14 +85,33 @@ export default async function AssetsPage({
         <Sidebar />
         <main className="w-full bg-gray-50 min-h-screen pl-64">
           <div className="container mx-auto px-4 py-8 flex flex-col gap-8">
+            {/* SnapTrade Integration */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-4">
+              <BrokerAccountsList />
+              <BrokerHoldingsList />
+            </div>
+            {/* Header Section with Sync Button */}
+            <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+              <h1 className="text-3xl font-bold">My Assets</h1>
+              <div className="flex items-center gap-3">
+                <SyncAssetsButton />
+                <AddAssetButton />
+                <div className="ml-2">
+                  {/* @ts-expect-error Server Component */}
+                  <SyncSnapTradeAssets />
+                </div>
+              </div>
+            </header>
+
             {/* Success/Error Alerts */}
             {showSuccessAlert && (
               <Alert className="bg-green-50 border-green-200">
                 <CheckCircle2 className="h-4 w-4 text-green-600" />
                 <AlertTitle className="text-green-800">Success</AlertTitle>
                 <AlertDescription className="text-green-700">
-                  Your accounts have been successfully linked and assets
-                  imported from SnapTrade.
+                  Your accounts have been successfully linked
+                  {broker ? ` with ${broker}` : ""}. If your assets don't appear
+                  below, click the "Sync Assets" button above.
                 </AlertDescription>
               </Alert>
             )}
@@ -79,17 +121,11 @@ export default async function AssetsPage({
                 <AlertCircle className="h-4 w-4 text-red-600" />
                 <AlertTitle className="text-red-800">Error</AlertTitle>
                 <AlertDescription className="text-red-700">
-                  There was a problem linking your accounts. Please try again or
-                  contact support.
+                  {errorMessage ||
+                    "There was a problem linking your accounts. Please try again or contact support."}
                 </AlertDescription>
               </Alert>
             )}
-
-            {/* Header Section */}
-            <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-              <h1 className="text-3xl font-bold">My Assets</h1>
-              <AddAssetButton />
-            </header>
 
             {/* Assets List */}
             <Card className="shadow-sm border-gray-200 overflow-hidden">

@@ -19,9 +19,33 @@ export default function HandleSnapTradeConnection({
   useEffect(() => {
     const connectToBroker = async () => {
       try {
+        if (typeof window === "undefined") {
+          console.log(
+            "Window object not available, skipping broker connection",
+          );
+          return;
+        }
+
         // Get the current URL for the redirect
         const origin = window.location.origin;
-        const redirectUri = `${origin}/api/snaptrade/callback`;
+        // Set up callback URL with redirect to assets page
+        const redirectUri = `${origin}/api/snaptrade/callback?redirect=${encodeURIComponent("/dashboard/assets")}`;
+
+        console.log(`Setting up redirect URI: ${redirectUri}`);
+
+        // Handle Interactive Brokers special case
+        let brokerIdToUse = brokerId;
+        if (
+          brokerIdToUse &&
+          (brokerIdToUse.toUpperCase() === "INTERACTIVE_BROKERS" ||
+            brokerIdToUse.toUpperCase() === "IBKR")
+        ) {
+          // Skip broker ID completely for Interactive Brokers
+          brokerIdToUse = null;
+          console.log(
+            "Interactive Brokers detected, omitting broker ID parameter",
+          );
+        }
 
         // Call the API to get the connection URL
         const response = await fetch("/api/snaptrade/connect", {
@@ -31,7 +55,7 @@ export default function HandleSnapTradeConnection({
           },
           body: JSON.stringify({
             userId,
-            brokerId,
+            brokerId: brokerIdToUse,
             redirectUri,
           }),
         });
@@ -44,7 +68,11 @@ export default function HandleSnapTradeConnection({
 
         // Redirect to the connection portal
         if (data.redirectUri) {
-          window.location.href = data.redirectUri;
+          console.log(`Redirecting to: ${data.redirectUri}`);
+          // Use a small timeout to ensure logs are visible
+          setTimeout(() => {
+            window.location.href = data.redirectUri;
+          }, 100);
         } else {
           throw new Error("No redirect URL returned");
         }
@@ -62,7 +90,7 @@ export default function HandleSnapTradeConnection({
   }, [userId, brokerId, onSuccess, onError]);
 
   return (
-    <div className="flex flex-col items-center justify-center p-6">
+    <div className="flex flex-col items-center justify-center p-6 bg-white dark:bg-gray-900">
       {isConnecting && !error && (
         <>
           <div className="h-12 w-12 rounded-full border-4 border-t-transparent border-primary animate-spin mb-4"></div>

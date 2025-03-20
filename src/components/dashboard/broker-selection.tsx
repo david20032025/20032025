@@ -9,6 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { SUPPORTED_BROKERS, BROKER_ID_MAPPING } from "@/utils/snaptrade-sdk";
 
 interface BrokerSelectionProps {
   onBack: () => void;
@@ -44,44 +45,111 @@ export default function BrokerSelection({
   // Brokers by category
   const brokersByCategory: Record<
     string,
-    Array<{ id: string; name: string; country: string }>
+    Array<{ id: string; name: string; country: string; supported: boolean }>
   > = {
     traditional: [
-      { id: "ajbell", name: "AJ Bell", country: "UK" },
-      { id: "bux", name: "BUX", country: "Netherlands" },
-      { id: "commsec", name: "CommSec", country: "Australia" },
-      { id: "alpaca", name: "Alpaca", country: "US" },
-      { id: "chase", name: "Chase", country: "US" },
-      { id: "etrade", name: "E*TRADE", country: "US" },
-      { id: "fidelity", name: "Fidelity", country: "US" },
-      { id: "ibkr", name: "Interactive Brokers", country: "US" },
-      { id: "questrade", name: "Questrade", country: "Canada" },
-      { id: "robinhood", name: "Robinhood", country: "US" },
-      { id: "schwab", name: "Schwab", country: "US" },
-      { id: "tradestation", name: "TradeStation", country: "US" },
-      { id: "trading212", name: "Trading 212", country: "Netherlands" },
-      { id: "vanguard", name: "Vanguard", country: "US" },
-      { id: "wellsfargo", name: "Wells Fargo", country: "US" },
-      { id: "wealthsimple", name: "Wealthsimple", country: "Canada" },
+      { id: "ajbell", name: "AJ Bell", country: "UK", supported: false },
+      { id: "bux", name: "BUX", country: "Netherlands", supported: false },
+      {
+        id: "commsec",
+        name: "CommSec",
+        country: "Australia",
+        supported: false,
+      },
+      { id: "alpaca", name: "Alpaca", country: "US", supported: true },
+      { id: "chase", name: "Chase", country: "US", supported: false },
+      { id: "etrade", name: "E*TRADE", country: "US", supported: false },
+      { id: "fidelity", name: "Fidelity", country: "US", supported: true },
+      {
+        id: "ibkr",
+        name: "Interactive Brokers",
+        country: "US",
+        supported: true,
+      },
+      {
+        id: "questrade",
+        name: "Questrade",
+        country: "Canada",
+        supported: true,
+      },
+      { id: "robinhood", name: "Robinhood", country: "US", supported: true },
+      { id: "schwab", name: "Schwab", country: "US", supported: false },
+      {
+        id: "tradestation",
+        name: "TradeStation",
+        country: "US",
+        supported: true,
+      },
+      {
+        id: "trading212",
+        name: "Trading 212",
+        country: "Netherlands",
+        supported: true,
+      },
+      { id: "vanguard", name: "Vanguard", country: "US", supported: true },
+      {
+        id: "wellsfargo",
+        name: "Wells Fargo",
+        country: "US",
+        supported: false,
+      },
+      {
+        id: "wealthsimple",
+        name: "Wealthsimple",
+        country: "Canada",
+        supported: false, // Changed to false since it's not supported by SnapTrade API
+      },
     ],
     crypto: [
-      { id: "binance", name: "Binance", country: "Global" },
-      { id: "coinbase", name: "Coinbase", country: "US" },
-      { id: "kraken", name: "Kraken", country: "US" },
-      { id: "unocoin", name: "Unocoin", country: "India" },
+      { id: "binance", name: "Binance", country: "Global", supported: false },
+      { id: "coinbase", name: "Coinbase", country: "US", supported: false },
+      { id: "kraken", name: "Kraken", country: "US", supported: false },
+      { id: "unocoin", name: "Unocoin", country: "India", supported: false },
     ],
     other: [
-      { id: "public", name: "Public", country: "US" },
-      { id: "upstox", name: "Upstox", country: "India" },
-      { id: "zerodha", name: "Zerodha", country: "India" },
+      { id: "public", name: "Public", country: "US", supported: false },
+      { id: "upstox", name: "Upstox", country: "India", supported: false },
+      { id: "zerodha", name: "Zerodha", country: "India", supported: false },
     ],
   };
 
   const handleBrokerSelect = (brokerId: string) => {
     setIsLoading(true);
     try {
-      // Call the onSelect callback with the selected broker ID
-      onSelect(brokerId);
+      // Get the mapped SnapTrade broker ID if available
+      let snapTradeBrokerId = BROKER_ID_MAPPING[brokerId];
+
+      // Special handling for Interactive Brokers
+      if (
+        brokerId === "ibkr" ||
+        brokerId.toUpperCase() === "INTERACTIVE_BROKERS"
+      ) {
+        snapTradeBrokerId = null; // Skip broker ID for Interactive Brokers
+        console.log(
+          "Interactive Brokers selected, will omit broker ID parameter",
+        );
+      }
+
+      // Check if this broker is supported by SnapTrade
+      const broker = brokersByCategory[selectedCategory || ""]?.find(
+        (b) => b.id === brokerId,
+      );
+
+      if (!broker?.supported) {
+        alert(
+          `${broker?.name || "This broker"} is not currently supported. Please select a supported broker.`,
+        );
+        setIsLoading(false);
+        return;
+      }
+
+      // Call the onSelect callback with the mapped broker ID if available, otherwise use the original
+      // For Interactive Brokers, pass null
+      onSelect(
+        snapTradeBrokerId !== undefined
+          ? snapTradeBrokerId
+          : brokerId.toUpperCase(),
+      );
     } catch (error) {
       console.error("Error selecting broker:", error);
       setIsLoading(false);
@@ -156,15 +224,25 @@ export default function BrokerSelection({
               {brokersByCategory[selectedCategory].map((broker) => (
                 <button
                   key={broker.id}
-                  className="flex items-center justify-between p-4 rounded-lg border border-gray-200 hover:border-primary hover:bg-gray-50 transition-colors"
+                  className={`flex items-center justify-between p-4 rounded-lg border ${broker.supported ? "border-gray-200 hover:border-primary hover:bg-gray-50" : "border-gray-200 opacity-60 cursor-not-allowed"} transition-colors`}
                   onClick={() => handleBrokerSelect(broker.id)}
-                  disabled={isLoading}
+                  disabled={isLoading || !broker.supported}
+                  title={
+                    broker.supported
+                      ? `Connect to ${broker.name}`
+                      : `${broker.name} is not currently supported`
+                  }
                 >
                   <div className="text-left">
                     <div className="font-medium">{broker.name}</div>
                     <div className="text-sm text-gray-500">
                       {broker.country}
                     </div>
+                    {!broker.supported && (
+                      <div className="text-xs text-red-500 mt-1">
+                        Not supported yet
+                      </div>
+                    )}
                   </div>
                   <div className="text-primary">
                     {isLoading ? (

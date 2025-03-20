@@ -10,8 +10,20 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { createClient } from "../../../supabase/client";
-import { RefreshCw, ExternalLink, AlertCircle } from "lucide-react";
+import { RefreshCw, ExternalLink, AlertCircle, Trash2 } from "lucide-react";
+import RefreshSnapTradeButton from "./refresh-snaptrade-button";
 
 interface BrokerAccount {
   id: string;
@@ -22,6 +34,7 @@ interface BrokerAccount {
     id: string;
     name: string;
   };
+  connection_id?: string;
 }
 
 export default function BrokerAccountsList() {
@@ -30,6 +43,10 @@ export default function BrokerAccountsList() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
+  const [deletingAccount, setDeletingAccount] = useState<BrokerAccount | null>(
+    null,
+  );
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     const fetchUserAndAccounts = async () => {
@@ -97,6 +114,42 @@ export default function BrokerAccountsList() {
     }
   };
 
+  const handleDeleteAccount = async (account: BrokerAccount) => {
+    if (!userId) return;
+
+    setIsDeleting(true);
+    try {
+      // Delete the connection from SnapTrade
+      const response = await fetch(
+        `/api/snaptrade/connect?userId=${userId}&connectionId=${account.connection_id}`,
+        {
+          method: "DELETE",
+          headers: {
+            "Content-Type": "application/json",
+          },
+        },
+      );
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || "Failed to delete connection");
+      }
+
+      // Refresh the accounts list
+      await fetchAccounts(userId);
+      setDeletingAccount(null);
+    } catch (err) {
+      console.error("Error deleting account:", err);
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to delete account. Please try again later.",
+      );
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   const handleAddAccount = () => {
     // Open the add asset dialog with the link accounts option
     // This would typically be handled by a global state or context
@@ -131,14 +184,12 @@ export default function BrokerAccountsList() {
           <div className="flex flex-col items-center justify-center py-6 text-center">
             <AlertCircle className="h-10 w-10 text-red-500 mb-2" />
             <p className="text-red-500 font-medium">{error}</p>
-            <Button
-              variant="outline"
-              size="sm"
-              className="mt-4"
-              onClick={handleRefresh}
-            >
-              <RefreshCw className="h-4 w-4 mr-2" /> Try Again
-            </Button>
+            <div className="flex gap-2 mt-4">
+              <Button variant="outline" size="sm" onClick={handleRefresh}>
+                <RefreshCw className="h-4 w-4 mr-2" /> Try Again
+              </Button>
+              {userId && <RefreshSnapTradeButton userId={userId} />}
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -152,9 +203,12 @@ export default function BrokerAccountsList() {
           <CardTitle>Connected Accounts</CardTitle>
           <CardDescription>Your linked investment accounts</CardDescription>
         </div>
-        <Button variant="outline" size="sm" onClick={handleRefresh}>
-          <RefreshCw className="h-4 w-4 mr-2" /> Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={handleRefresh}>
+            <RefreshCw className="h-4 w-4 mr-2" /> Refresh
+          </Button>
+          {userId && <RefreshSnapTradeButton userId={userId} />}
+        </div>
       </CardHeader>
       <CardContent>
         {accounts.length === 0 ? (
@@ -182,16 +236,58 @@ export default function BrokerAccountsList() {
                     {account.number && ` • ${account.number}`}
                   </div>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  asChild
-                  className="text-blue-600"
-                >
-                  <a href={`/dashboard/assets?accountId=${account.id}`}>
-                    <ExternalLink className="h-4 w-4 mr-1" /> View
-                  </a>
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    asChild
+                    className="text-blue-600"
+                  >
+                    <a href={`/dashboard/assets?accountId=${account.id}`}>
+                      <ExternalLink className="h-4 w-4 mr-1" /> View
+                    </a>
+                  </Button>
+                  <AlertDialog
+                    open={deletingAccount?.id === account.id}
+                    onOpenChange={(open) => !open && setDeletingAccount(null)}
+                  >
+                    <AlertDialogTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-red-600"
+                        onClick={() => setDeletingAccount(account)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Delete Connection</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          Are you sure you want to delete the connection to{" "}
+                          {account.name}? This will remove all data associated
+                          with this account.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel disabled={isDeleting}>
+                          Cancel
+                        </AlertDialogCancel>
+                        <AlertDialogAction
+                          onClick={(e) => {
+                            e.preventDefault();
+                            handleDeleteAccount(account);
+                          }}
+                          className="bg-red-600 hover:bg-red-700"
+                          disabled={isDeleting}
+                        >
+                          {isDeleting ? "Deleting..." : "Delete"}
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                </div>
               </div>
             ))}
           </div>
